@@ -1,0 +1,17 @@
+[project]
+name = "databricks-workspace-review-skill"
+version = "0.1.0"
+description = "A read-only Databricks workspace review skill"
+requires-python = ">=3.9"
+dependencies = [
+    "databricks-sdk",
+    "numpy",
+    "pandas",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
