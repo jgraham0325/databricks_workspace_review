@@ -4,6 +4,9 @@ Every value can be overridden at run time:
     ctx = ReviewContext.create(spark, skill_dir, overrides={"small_files_high_count": 50_000})
 """
 
+# Implemented review areas. Empty include_areas means all of these.
+REVIEW_AREAS = ("uc", "jobs", "compute", "settings")
+
 DEFAULTS = {
     # --- Run scope -----------------------------------------------------------
     # How far back to look at *activity*: maintenance runs (e.g. "no OPTIMIZE in the last N days"),
@@ -13,6 +16,16 @@ DEFAULTS = {
     # If non-empty, review only these catalogs. Include "hive_metastore" to also inventory legacy
     # Hive tables; with an empty list, hive_metastore is inventoried whenever it's readable.
     "include_catalogs": [],
+    # If non-empty, review only these schemas (Unity Catalog data only). Each entry is a schema
+    # name (any in-scope catalog) or catalog.schema. Empty = all schemas in in-scope catalogs.
+    "include_schemas": [],
+    # If non-empty, run only these areas: uc, jobs, compute, settings. Empty = all four.
+    # ["uc"] is tables only (inventory, small files, migration); skips jobs, compute, and settings.
+    "include_areas": [],
+    # Catalog holding system tables (information_schema, billing, compute, lakeflow, …).
+    # Some workspaces expose a views catalog with the same schema/table names, filtered to the
+    # caller, instead of granting SELECT on `system`. Override to that catalog name.
+    "system_catalog": "system",
     # Catalogs never reviewed (system/internal/sample data). Applied on top of include_catalogs.
     "excluded_catalogs": ["system", "samples", "__databricks_internal"],
     # Extra catalogs the caller wants skipped (e.g. Delta Sharing / foreign catalogs).

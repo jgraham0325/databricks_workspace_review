@@ -23,6 +23,15 @@ CATALOG_COLUMNS = {
     "po_activity": "catalog_name",
 }
 
+# Schema column (or expression) for queries that {schema_filter} applies to.
+SCHEMA_COLUMNS = {
+    "schemas": "schema_name",
+    "tables": "table_schema",
+    "volumes": "volume_schema",
+    "hive_lineage_targets": "substring_index(substring_index(target_table_full_name, '.', 2), '.', -1)",
+    "po_activity": "schema_name",
+}
+
 
 def run(ctx: ReviewContext) -> None:
     collect(ctx)
@@ -31,10 +40,10 @@ def run(ctx: ReviewContext) -> None:
 
 def collect(ctx: ReviewContext) -> None:
     if not ctx.sources.get("information_schema"):
-        ctx.note("Unity Catalog inventory skipped: system.information_schema is not readable.")
+        ctx.note(f"Unity Catalog inventory skipped: {ctx.system_table('information_schema')} is not readable.")
         return
 
-    q = {name: ctx.render(sql, catalog_col=CATALOG_COLUMNS[name])
+    q = {name: ctx.render(sql, catalog_col=CATALOG_COLUMNS[name], schema_col=SCHEMA_COLUMNS.get(name))
          for name, sql in ctx.queries("uc_assets.sql").items()}
     catalogs = ctx.query_pdf(q["catalogs"])
     schemas = ctx.query_pdf(q["schemas"])
@@ -44,6 +53,13 @@ def collect(ctx: ReviewContext) -> None:
     missing = sorted(set(ctx.included_catalogs()) - set(catalogs["catalog_name"].str.lower()) - {"hive_metastore"})
     if missing:
         ctx.note(f"Requested catalogs not found or not visible to {ctx.current_user}: {', '.join(missing)}")
+    missing_schemas = _missing_schemas(ctx, schemas)
+    if missing_schemas:
+        ctx.note(f"Requested schemas not found or not visible to {ctx.current_user}: {', '.join(missing_schemas)}")
+
+    if ctx.included_schema_specs():
+        keep = set(schemas["catalog_name"].str.lower()) if not schemas.empty else set()
+        catalogs = catalogs[catalogs["catalog_name"].str.lower().isin(keep)] if keep else catalogs.iloc[0:0]
     tables["full_name"] = tables["table_catalog"] + "." + tables["table_schema"] + "." + tables["table_name"]
 
     for name, df in [("catalogs", catalogs), ("schemas", schemas), ("tables", tables), ("volumes", volumes)]:
@@ -63,12 +79,12 @@ def collect(ctx: ReviewContext) -> None:
         try:
             ctx.add_stat(AREA, "hive_lineage_targets", ctx.query_pdf(q["hive_lineage_targets"]))
         except Exception as exc:
-            ctx.record_error("system.access.table_lineage", "uc_assets", exc)
+            ctx.record_error(ctx.system_table("access", "table_lineage"), "uc_assets", exc)
     if ctx.sources.get("predictive_optimization"):
         try:
             ctx.add_stat(AREA, "po_activity", ctx.query_pdf(q["po_activity"]))
         except Exception as exc:
-            ctx.record_error("system.storage.predictive_optimization_operations_history", "uc_assets", exc)
+            ctx.record_error(ctx.system_table("storage", "predictive_optimization_operations_history"), "uc_assets", exc)
 
     if ctx.sources.get("hive_metastore") and ctx.catalog_in_scope("hive_metastore"):
         ctx.add_stat(AREA, "hive_tables", _hive_inventory(ctx))
@@ -108,6 +124,25 @@ def _run_empty_schemas(ctx):
         _check_empty_schemas(ctx, schemas, tables, volumes)
 
 
+def _missing_schemas(ctx: ReviewContext, schemas: pd.DataFrame) -> list:
+    specs = ctx.included_schema_specs()
+    if not specs:
+        return []
+    found_pairs = set()
+    found_names = set()
+    if not schemas.empty:
+        found_pairs = set(zip(schemas["catalog_name"].str.lower(), schemas["schema_name"].str.lower()))
+        found_names = set(schemas["schema_name"].str.lower())
+    missing = []
+    for catalog, schema in specs:
+        if catalog is None:
+            if schema not in found_names:
+                missing.append(schema)
+        elif (catalog, schema) not in found_pairs:
+            missing.append(f"{catalog}.{schema}")
+    return missing
+
+
 def _value_counts(df: pd.DataFrame, col: str) -> dict:
     if df.empty:
         return {}
@@ -119,6 +154,8 @@ def _hive_inventory(ctx: ReviewContext) -> pd.DataFrame:
     schemas = ctx.run_sql("SHOW SCHEMAS IN hive_metastore").collect()
     for s in schemas:
         db = s[0]  # column is databaseName or namespace depending on runtime
+        if not ctx.schema_in_scope("hive_metastore", db):
+            continue
         try:
             for t in ctx.run_sql(f"SHOW TABLES IN {quote_ident('hive_metastore', db)}").collect():
                 if not t["isTemporary"]:

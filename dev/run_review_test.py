@@ -3,6 +3,7 @@
 import sys, time, json, traceback
 dbutils.widgets.text("skill_dir", "/Workspace/Users/<you>/.assistant/skills/workspace-review")
 dbutils.widgets.text("include", "")
+dbutils.widgets.text("schemas", "")
 dbutils.widgets.text("overrides", "{}")
 SKILL_DIR = dbutils.widgets.get("skill_dir").strip()
 if "<you>" in SKILL_DIR:
@@ -13,13 +14,14 @@ for m in [m for m in sys.modules if m == "review" or m.startswith("review.")]:
 import review
 
 INCLUDE = [c.strip() for c in dbutils.widgets.get("include").split(",") if c.strip()]
+SCHEMAS = [s.strip() for s in dbutils.widgets.get("schemas").split(",") if s.strip()]
 OVERRIDES = json.loads(dbutils.widgets.get("overrides"))
-ctx = review.ReviewContext.create(spark, SKILL_DIR, include_catalogs=INCLUDE, activity_window_days=30,
-                                  overrides=OVERRIDES)
+ctx = review.ReviewContext.create(spark, SKILL_DIR, include_catalogs=INCLUDE, include_schemas=SCHEMAS,
+                                  activity_window_days=30, overrides=OVERRIDES)
 
 # Time each step (same order and error handling as run_all).
 timings = {}
-for name, step in review.STEPS:
+for name, step in review.steps_to_run(ctx):
     t = time.time()
     try:
         step(ctx)

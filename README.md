@@ -32,7 +32,8 @@ Then, in a notebook with the Assistant in agent mode, ask: "run a workspace revi
 Not part of the skill. Import each into a workspace as a notebook, then run it as a one-time job:
 
 - `run_review_test.py`: runs the review exactly as `SKILL.md` does, with per-step timings and metadata diagnostics.
-  Job parameters: `skill_dir`, `include` (comma-separated catalogs), and `overrides` (JSON).
+  Job parameters: `skill_dir`, `include` (comma-separated catalogs), `schemas` (comma-separated schema or
+  catalog.schema names), and `overrides` (JSON).
 - `seed_migration_scenario.py`: creates a Hive → UC deep-clone scenario with small files in
   `hive_metastore.wr_seed` and `<uc_catalog>.wr_seed`. Set the required `uc_catalog` job parameter. It writes to
   `hive_metastore`, so use compatible classic compute. Review it with

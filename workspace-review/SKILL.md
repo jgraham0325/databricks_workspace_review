@@ -28,12 +28,22 @@ user to the outputs.
 
 ### 1. Confirm settings with the user
 Ask, briefly, before running (use defaults if the user says "just run it"):
+- **What to review**: the whole workspace (default: Unity Catalog, jobs, compute, settings), or **tables
+  only** (`include_areas=["uc"]`). Tables-only skips jobs, compute, and settings (and their system-table
+  probes). The slow part is still per-table `DESCRIBE` if there are many tables; pair this with catalog
+  and schema filters when a catalog is huge.
 - **Which catalogs** to review: all (default), or a specific list (`include_catalogs`). This only scopes the
-  Unity Catalog section; jobs, compute, and settings always cover the whole workspace. Add
+  Unity Catalog section; included jobs/compute/settings areas still cover the whole workspace. Add
   `hive_metastore` to the list to also inventory legacy Hive tables; it's included automatically only when
   reviewing all catalogs.
+- **Which schemas** to review: all in the chosen catalogs (default), or a specific list (`include_schemas`).
+  Use this when a catalog has huge schemas you want to skip. Each entry is a schema name (any in-scope
+  catalog) or `catalog.schema`.
 - **Catalogs to skip**, beyond `system`, `samples`, `__databricks_internal` (e.g. Delta Sharing or foreign
   catalogs). Applied on top of the include list.
+- **System tables catalog** (default **`system`**). Some workspaces don't grant `system` and instead expose a
+  views catalog with the same schema and table names, filtered to the logged-in user. If that's this workspace,
+  set `system_catalog` to that catalog. Leave it as `system` otherwise.
 - **Activity window** in days (default **30**). Explain it as: how far back to look at activity: job runs and
   failures, cluster utilization, spend, and whether OPTIMIZE and VACUUM have run recently. It does **not** limit which
   tables are reviewed: tables of any age are included, and migration history is always read in full.
@@ -55,9 +65,11 @@ import review
 
 ctx = review.ReviewContext.create(
     spark, SKILL_DIR,
+    include_areas=[],             # e.g. ["uc"] for tables only; empty = uc, jobs, compute, settings
     include_catalogs=[],          # e.g. ["sales", "finance"]; empty = all catalogs
+    include_schemas=[],           # e.g. ["gold", "main.silver"]; empty = all schemas
     activity_window_days=30,
-    overrides={"extra_excluded_catalogs": [], "deep_scan": False},
+    overrides={"extra_excluded_catalogs": [], "deep_scan": False, "system_catalog": "system"},
 )
 paths = review.run_all(ctx)
 display(review.findings_table(ctx))
@@ -82,7 +94,8 @@ Reply in chat with only:
 2. The executive summary, copied **verbatim** from `report.md`: read the file and paste the text from
    `## Executive summary` up to, but not including, `## Workspace overview`. Don't reword, reorder, or add to it.
 3. Any coverage gaps: `ctx.coverage_notes`, and the count of `ctx.errors` if it's not zero. If
-   `system.information_schema` wasn't readable, say which grants are needed (see `references/system_tables.md`).
+   information_schema in the configured `system_catalog` (default `system`) wasn't readable, say which
+   grants are needed (see `references/system_tables.md`).
 4. One line: "Open the drill-down notebook and click **Run all** to see every affected table."
 
 ### 4. Follow-up questions

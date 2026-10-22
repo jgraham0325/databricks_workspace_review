@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from .config import DEFAULTS
+from .config import DEFAULTS, REVIEW_AREAS
 
 SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 SEVERITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -37,6 +37,17 @@ def assert_read_only(statement: str) -> None:
 def _strip_sql_comments(statement: str) -> str:
     statement = re.sub(r"/\*.*?\*/", " ", statement, flags=re.S)
     return re.sub(r"--[^\n]*", " ", statement)
+
+
+def parse_schema_spec(raw: str) -> tuple:
+    """Split an include_schemas entry into (catalog_or_None, schema), lowercased."""
+    spec = str(raw).strip()
+    parts = spec.split(".")
+    if len(parts) == 1 and parts[0]:
+        return None, parts[0].lower()
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return parts[0].lower(), parts[1].lower()
+    raise ValueError(f"include_schemas entry must be a schema name or catalog.schema, not {raw!r}")
 
 
 def quote_ident(*parts: str) -> str:
@@ -157,6 +168,8 @@ class ReviewContext:
     @classmethod
     def create(cls, spark, skill_dir: str, activity_window_days: Optional[int] = None,
                include_catalogs: Optional[List[str]] = None,
+               include_schemas: Optional[List[str]] = None,
+               include_areas: Optional[List[str]] = None,
                overrides: Optional[Dict[str, Any]] = None) -> "ReviewContext":
         config = copy.deepcopy(DEFAULTS)
         unknown = set(overrides or {}) - set(DEFAULTS)
@@ -167,6 +180,27 @@ class ReviewContext:
             config["activity_window_days"] = int(activity_window_days)
         if include_catalogs is not None:
             config["include_catalogs"] = list(include_catalogs)
+        if include_schemas is not None:
+            config["include_schemas"] = list(include_schemas)
+        if include_areas is not None:
+            config["include_areas"] = list(include_areas)
+        catalog = str(config["system_catalog"]).strip()
+        if not catalog:
+            raise ValueError("system_catalog must be a non-empty catalog name")
+        config["system_catalog"] = catalog
+        config["include_schemas"] = [str(s).strip() for s in config["include_schemas"] if str(s).strip()]
+        for spec in config["include_schemas"]:
+            parse_schema_spec(spec)
+        aliases = {"tables": "uc"}
+        config["include_areas"] = [
+            aliases.get(a, a) for a in (
+                str(raw).strip().lower() for raw in config["include_areas"]
+            ) if a
+        ]
+        unknown_areas = [a for a in config["include_areas"] if a not in REVIEW_AREAS]
+        if unknown_areas:
+            raise ValueError(
+                f"Unknown include_areas {unknown_areas}; choose from {list(REVIEW_AREAS)}")
         return cls(spark=spark, skill_dir=skill_dir, config=config,
                    started_at=datetime.now(timezone.utc))
 
@@ -204,25 +238,58 @@ class ReviewContext:
     def queries(self, filename: str) -> Dict[str, str]:
         return load_named_queries(os.path.join(self.skill_dir, "scripts", "sql", filename))
 
-    def render(self, sql: str, catalog_col: Optional[str] = None, **params) -> str:
+    def render(self, sql: str, catalog_col: Optional[str] = None, schema_col: Optional[str] = None,
+               **params) -> str:
         """Fill the standard placeholders used by the .sql files.
 
         `{catalog_filter}` needs `catalog_col`: the column (or expression) holding the catalog name.
+        `{schema_filter}` is TRUE unless `include_schemas` is set; then it needs `schema_col`, and
+        qualified catalog.schema entries also need `catalog_col`.
         """
         values = {
             "activity_window_days": int(self.config["activity_window_days"]),
             "workspace_id": int(self.workspace_id) if self.workspace_id is not None else "NULL",
+            "system_catalog": quote_ident(self.system_catalog()),
+            "schema_filter": "TRUE",
         }
         if catalog_col:
             values["catalog_filter"] = self.catalog_filter_sql(catalog_col)
+        if schema_col:
+            values["schema_filter"] = self.schema_filter_sql(schema_col, catalog_col)
         values.update(params)
         return sql.format(**values)
 
+    def system_catalog(self) -> str:
+        return str(self.config["system_catalog"]).strip()
+
+    def system_table(self, *parts: str) -> str:
+        """Unquoted `catalog.schema[.table]` for logs and coverage notes."""
+        return ".".join((self.system_catalog(),) + parts)
+
     def excluded_catalogs(self) -> List[str]:
-        return [n.lower() for n in list(self.config["excluded_catalogs"]) + list(self.config["extra_excluded_catalogs"])]
+        names = list(self.config["excluded_catalogs"]) + list(self.config["extra_excluded_catalogs"])
+        names.append(self.system_catalog())
+        seen, unique = set(), []
+        for name in names:
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(key)
+        return unique
+
+    def included_areas(self) -> List[str]:
+        """Areas this run covers. Empty include_areas means every implemented area."""
+        return list(self.config["include_areas"] or REVIEW_AREAS)
+
+    def area_in_scope(self, area: str) -> bool:
+        return area in self.included_areas()
 
     def included_catalogs(self) -> List[str]:
         return [n.lower() for n in self.config["include_catalogs"]]
+
+    def included_schema_specs(self) -> List[tuple]:
+        """(catalog_or_None, schema) pairs, lowercased. Empty means all schemas."""
+        return [parse_schema_spec(spec) for spec in self.config["include_schemas"]]
 
     def catalog_filter_sql(self, catalog_col: str) -> str:
         """SQL predicate keeping only in-scope catalogs: the include list (if any) minus the exclusions."""
@@ -231,9 +298,34 @@ class ReviewContext:
             clauses.append(f"lower({catalog_col}) IN ({', '.join(sql_literal(n) for n in self.included_catalogs())})")
         return " AND ".join(clauses)
 
+    def schema_filter_sql(self, schema_col: str, catalog_col: Optional[str] = None) -> str:
+        """SQL predicate keeping only include_schemas (TRUE if that list is empty)."""
+        specs = self.included_schema_specs()
+        if not specs:
+            return "TRUE"
+        unqualified = [schema for catalog, schema in specs if catalog is None]
+        qualified = [(catalog, schema) for catalog, schema in specs if catalog is not None]
+        clauses = []
+        if unqualified:
+            clauses.append(f"lower({schema_col}) IN ({', '.join(sql_literal(n) for n in unqualified)})")
+        if qualified:
+            if not catalog_col:
+                raise ValueError("Qualified include_schemas entries need catalog_col")
+            pairs = ", ".join(f"({sql_literal(c)}, {sql_literal(s)})" for c, s in qualified)
+            clauses.append(f"(lower({catalog_col}), lower({schema_col})) IN ({pairs})")
+        return "(" + " OR ".join(clauses) + ")" if len(clauses) > 1 else clauses[0]
+
     def catalog_in_scope(self, catalog: str) -> bool:
         name = catalog.lower()
         return name not in self.excluded_catalogs() and (not self.included_catalogs() or name in self.included_catalogs())
+
+    def schema_in_scope(self, catalog: str, schema: str) -> bool:
+        specs = self.included_schema_specs()
+        if not specs:
+            return True
+        catalog_name, schema_name = catalog.lower(), schema.lower()
+        return any(schema_name == schema_spec and (cat is None or cat == catalog_name)
+                   for cat, schema_spec in specs)
 
     # --- Results -----------------------------------------------------------------
     def add_stat(self, area: str, name: str, value: Any) -> None:

@@ -1,9 +1,11 @@
 # Checks
 
-All thresholds live in `scripts/review/config.py` and can be overridden per run.
+All thresholds live in `scripts/review/config.py` and can be overridden per run. Set `system_catalog` when
+system tables are exposed through a views catalog instead of `system`.
 Severity: 🔴 HIGH · 🟠 MEDIUM · 🟡 LOW.
 
-**Scope vs activity window.** `include_catalogs` / exclusions decide *which* objects are reviewed. The activity
+**Scope vs activity window.** `include_areas` chooses sections (`uc`, `jobs`, `compute`, `settings`; empty = all).
+`include_catalogs`, `include_schemas`, and exclusions decide *which* objects are reviewed in Unity Catalog. The activity
 window (`activity_window_days`) only sets how far back to look for recent activity (maintenance runs; later job
 runs and spend). Tables are never filtered by creation date, and clone/OPTIMIZE history and PO history are read
 in full so that old migrations are still detected.

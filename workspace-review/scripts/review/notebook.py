@@ -23,7 +23,9 @@ def _md(text: str) -> str:
 def build_notebook_source(ctx: ReviewContext, findings: List[Finding], data_files: Dict[str, str],
                           run_dir: str, report_path: str, sql_path: str) -> str:
     """Notebook source. `data_files` maps check_id -> evidence CSV path (plus 'findings' and 'remediation')."""
-    scope = ", ".join(ctx.config["include_catalogs"]) or "all catalogs"
+    catalogs = ", ".join(ctx.config["include_catalogs"]) or "all catalogs"
+    schemas = ", ".join(ctx.config["include_schemas"])
+    scope = f"{catalogs}; schemas: {schemas}" if schemas else catalogs
     cells = [
         _md(f"# Workspace review drill-down\n\n"
             f"Generated {ctx.started_at.strftime('%Y-%m-%d %H:%M UTC')} by {ctx.current_user} · scope: {scope} · "

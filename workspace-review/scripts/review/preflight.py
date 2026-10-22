@@ -33,8 +33,10 @@ def run(ctx: ReviewContext) -> dict:
         ctx.note("Could not determine the workspace ID; system-table results are not filtered to this workspace.")
 
     for name, probe in ctx.queries("preflight.sql").items():
+        if not _source_needed(ctx, name):
+            continue
         try:
-            ctx.run_sql(probe).collect()
+            ctx.run_sql(ctx.render(probe)).collect()
             ctx.sources[name] = True
         except Exception as exc:
             ctx.sources[name] = False
@@ -45,11 +47,11 @@ def run(ctx: ReviewContext) -> dict:
         # Record the metric keys PO actually emits on this workspace, so the migration check
         # can use them and the report can show them if parsing turns out to be wrong.
         try:
-            keys = ctx.query_pdf(
+            keys = ctx.query_pdf(ctx.render(
                 "SELECT DISTINCT operation_type, explode(map_keys(operation_metrics)) AS metric_key "
-                "FROM system.storage.predictive_optimization_operations_history "
+                "FROM {system_catalog}.storage.predictive_optimization_operations_history "
                 "WHERE start_time >= current_timestamp() - INTERVAL 90 DAYS"
-            )
+            ))
             ctx.add_stat("preflight", "po_metric_keys", keys)
         except Exception as exc:
             ctx.record_error("predictive_optimization", "preflight metric keys", exc)
@@ -60,8 +62,31 @@ def run(ctx: ReviewContext) -> dict:
         "workspace_url": ctx.workspace_url,
         "activity_window_days": ctx.config["activity_window_days"],
         "include_catalogs": ctx.config["include_catalogs"] or "(all)",
-        "excluded_catalogs": ctx.config["excluded_catalogs"] + ctx.config["extra_excluded_catalogs"],
+        "include_schemas": ctx.config["include_schemas"] or "(all)",
+        "include_areas": list(ctx.included_areas()),
+        "system_catalog": ctx.system_catalog(),
+        "excluded_catalogs": ctx.excluded_catalogs(),
         "sources": dict(ctx.sources),
     }
     ctx.add_stat("preflight", "summary", summary)
     return summary
+
+
+# Which review area(s) need each preflight probe. Unlisted probes always run.
+_SOURCE_AREAS = {
+    "information_schema": ("uc",),
+    "table_lineage": ("uc",),
+    "predictive_optimization": ("uc",),
+    "hive_metastore": ("uc",),
+    "lakeflow": ("jobs",),
+    "billing": ("jobs", "compute"),
+    "list_prices": ("jobs", "compute"),
+    "compute": ("compute",),
+    "node_timeline": ("compute",),
+    "warehouses": ("compute",),
+}
+
+
+def _source_needed(ctx: ReviewContext, name: str) -> bool:
+    areas = _SOURCE_AREAS.get(name)
+    return areas is None or any(ctx.area_in_scope(area) for area in areas)

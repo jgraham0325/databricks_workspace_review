@@ -36,11 +36,11 @@ def collect(ctx: ReviewContext) -> None:
         try:
             clusters = ctx.query_pdf(q["clusters_current"])
         except Exception as exc:
-            ctx.record_error("system.compute.clusters", "compute", exc)
+            ctx.record_error(ctx.system_table("compute", "clusters"), "compute", exc)
     if clusters is None:
         try:
             clusters = clusters_from_api(ctx.api_list("/api/2.1/clusters/list", "clusters", {"page_size": 100}))
-            ctx.note("Cluster inventory read from the Clusters API (system.compute.clusters not readable).")
+            ctx.note(f"Cluster inventory read from the Clusters API ({ctx.system_table('compute', 'clusters')} not readable).")
         except Exception as exc:
             ctx.record_error("Clusters API", "compute", exc)
     if clusters is not None:
@@ -57,12 +57,12 @@ def collect(ctx: ReviewContext) -> None:
         try:
             ctx.add_stat(AREA, "utilization", ctx.query_pdf(q["cluster_utilization"]))
         except Exception as exc:
-            ctx.record_error("system.compute.node_timeline", "compute", exc)
+            ctx.record_error(ctx.system_table("compute", "node_timeline"), "compute", exc)
     if ctx.sources.get("billing") and ctx.sources.get("list_prices"):
         try:
             ctx.add_stat(AREA, "cost", ctx.query_pdf(q["compute_cost"]))
         except Exception as exc:
-            ctx.record_error("system.billing (compute cost)", "compute", exc)
+            ctx.record_error(f"{ctx.system_table('billing')} (compute cost)", "compute", exc)
 
     try:
         ctx.add_stat(AREA, "warehouses", warehouses_from_api(ctx.api_get("/api/2.0/sql/warehouses").get("warehouses") or []))
@@ -71,9 +71,9 @@ def collect(ctx: ReviewContext) -> None:
         if ctx.sources.get("warehouses"):
             try:
                 ctx.add_stat(AREA, "warehouses", warehouses_from_system(ctx.query_pdf(q["warehouses_current"])))
-                ctx.note("Warehouse inventory read from system.compute.warehouses (API not readable).")
+                ctx.note(f"Warehouse inventory read from {ctx.system_table('compute', 'warehouses')} (API not readable).")
             except Exception as exc2:
-                ctx.record_error("system.compute.warehouses", "compute", exc2)
+                ctx.record_error(ctx.system_table("compute", "warehouses"), "compute", exc2)
 
 
 def clusters_from_api(items: List[Dict[str, Any]]) -> pd.DataFrame:

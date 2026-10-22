@@ -36,9 +36,9 @@ def collect(ctx: ReviewContext) -> None:
             try:
                 ctx.add_stat(AREA, name, ctx.query_pdf(q[name]))
             except Exception as exc:
-                ctx.record_error(f"system.lakeflow ({name})", "jobs", exc)
+                ctx.record_error(f"{ctx.system_table('lakeflow')} ({name})", "jobs", exc)
     else:
-        ctx.note("Job run history read from the Jobs API instead of system.lakeflow (slower; pipelines not covered).")
+        ctx.note(f"Job run history read from the Jobs API instead of {ctx.system_table('lakeflow')} (slower; pipelines not covered).")
         try:
             ctx.add_stat(AREA, "job_runs", _runs_from_api(ctx))
         except Exception as exc:
@@ -48,7 +48,7 @@ def collect(ctx: ReviewContext) -> None:
         try:
             ctx.add_stat(AREA, "job_cost", ctx.query_pdf(q["job_cost"]))
         except Exception as exc:
-            ctx.record_error("system.billing (job cost)", "jobs", exc)
+            ctx.record_error(f"{ctx.system_table('billing')} (job cost)", "jobs", exc)
 
     try:
         jobs = ctx.api_list("/api/2.1/jobs/list", "jobs", {"expand_tasks": "true", "limit": 100})

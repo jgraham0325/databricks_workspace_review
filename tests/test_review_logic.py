@@ -10,13 +10,13 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL_DIR = os.path.join(ROOT, "workspace-review")
 
-from review import migration_backlog as mb  # noqa: E402
+from review import migration_backlog as mb, steps_to_run  # noqa: E402
 from review.config import DEFAULTS  # noqa: E402
 from review.context import (Finding, NotReadOnlyError, ReviewContext, assert_read_only,  # noqa: E402
                             load_named_queries, plural, principal_kind, quote_ident)
 from review.history import optimize_was_full, rewrite_ratio, summarize_history  # noqa: E402
 from review.table_detail import parse_po_status  # noqa: E402
-from review.uc_assets import CATALOG_COLUMNS  # noqa: E402
+from review.uc_assets import CATALOG_COLUMNS, SCHEMA_COLUMNS  # noqa: E402
 
 GB = 1024 ** 3
 
@@ -64,16 +64,22 @@ def test_sql_files_parse_render_and_are_read_only(filename, expected):
     queries = load_named_queries(os.path.join(SKILL_DIR, "scripts", "sql", filename))
     assert expected <= set(queries)
     for name, sql in queries.items():
-        rendered = ctx.render(sql, catalog_col=CATALOG_COLUMNS.get(name))
+        rendered = ctx.render(sql, catalog_col=CATALOG_COLUMNS.get(name),
+                              schema_col=SCHEMA_COLUMNS.get(name))
         assert "{" not in rendered
         assert_read_only(rendered)
         if "{catalog_filter}" in sql:
             assert "IN ('main')" in rendered
+        if "{system_catalog}" in sql:
+            assert "`system`." in rendered
+        if "{schema_filter}" in sql:
+            assert "TRUE" in rendered
 
 
 def test_every_filtered_query_has_a_catalog_column():
     queries = load_named_queries(os.path.join(SKILL_DIR, "scripts", "sql", "uc_assets.sql"))
     assert {n for n, sql in queries.items() if "{catalog_filter}" in sql} == set(CATALOG_COLUMNS)
+    assert {n for n, sql in queries.items() if "{schema_filter}" in sql} == set(SCHEMA_COLUMNS)
 
 
 def test_catalog_filter_exclude_only():
@@ -94,9 +100,64 @@ def test_catalog_filter_include_list():
     assert ctx2.catalog_in_scope("hive_metastore")
 
 
+def test_schema_filter_unqualified_and_qualified():
+    ctx = ReviewContext.create(spark=None, skill_dir=SKILL_DIR, include_schemas=["Sales", "finance.gold"])
+    sql = ctx.schema_filter_sql("table_schema", "table_catalog")
+    assert "lower(table_schema) IN ('sales')" in sql
+    assert "(lower(table_catalog), lower(table_schema)) IN (('finance', 'gold'))" in sql
+    assert ctx.schema_in_scope("main", "sales")
+    assert ctx.schema_in_scope("finance", "gold")
+    assert not ctx.schema_in_scope("finance", "silver")
+    assert not ctx.schema_in_scope("main", "gold")  # gold was qualified to finance
+    rendered = ctx.render("SELECT 1 WHERE {schema_filter}", catalog_col="table_catalog",
+                          schema_col="table_schema")
+    assert "{" not in rendered
+
+
+def test_schema_filter_all_when_unset():
+    ctx = ReviewContext.create(spark=None, skill_dir=SKILL_DIR)
+    assert ctx.schema_filter_sql("schema_name", "catalog_name") == "TRUE"
+    assert ctx.schema_in_scope("main", "anything")
+
+
+def test_schema_filter_rejects_table_name():
+    with pytest.raises(ValueError, match="catalog.schema"):
+        ReviewContext.create(spark=None, skill_dir=SKILL_DIR, include_schemas=["main.sales.orders"])
+
+
+def test_include_areas_tables_only_skips_other_steps():
+    ctx = ReviewContext.create(spark=None, skill_dir=SKILL_DIR, include_areas=["tables"])
+    assert ctx.included_areas() == ["uc"]
+    assert ctx.area_in_scope("uc") and not ctx.area_in_scope("jobs")
+    assert [name for name, _ in steps_to_run(ctx)] == [
+        "preflight", "uc_assets", "table_detail", "migration_backlog"]
+
+
+def test_include_areas_default_is_all_and_rejects_unknown():
+    ctx = ReviewContext.create(spark=None, skill_dir=SKILL_DIR)
+    assert ctx.included_areas() == ["uc", "jobs", "compute", "settings"]
+    with pytest.raises(ValueError, match="Unknown include_areas"):
+        ReviewContext.create(spark=None, skill_dir=SKILL_DIR, include_areas=["networking"])
+
+
 def test_unknown_setting_rejected():
     with pytest.raises(ValueError, match="lookback_days"):
         ReviewContext.create(spark=None, skill_dir=SKILL_DIR, overrides={"lookback_days": 7})
+
+
+def test_system_catalog_override_rewrites_sql_and_is_excluded():
+    ctx = ReviewContext.create(spark=None, skill_dir=SKILL_DIR, overrides={"system_catalog": "Acme_System"})
+    assert ctx.system_catalog() == "Acme_System"
+    assert ctx.system_table("billing", "usage") == "Acme_System.billing.usage"
+    assert "`Acme_System`.billing.usage" in ctx.render("SELECT 1 FROM {system_catalog}.billing.usage")
+    assert not ctx.catalog_in_scope("acme_system")
+    assert "acme_system" in ctx.excluded_catalogs()
+    assert "system" in ctx.excluded_catalogs()
+
+
+def test_empty_system_catalog_rejected():
+    with pytest.raises(ValueError, match="system_catalog"):
+        ReviewContext.create(spark=None, skill_dir=SKILL_DIR, overrides={"system_catalog": "  "})
 
 
 def test_finding_rejects_unknown_severity():

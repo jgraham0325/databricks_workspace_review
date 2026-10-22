@@ -137,6 +137,8 @@ def render_report(ctx: ReviewContext, remediation_file: str, notebook_path: str 
         "workspace_name": _workspace_name(ctx),
         "generated_at": ctx.started_at.strftime("%Y-%m-%d %H:%M UTC"),
         "catalog_scope": ", ".join(ctx.config["include_catalogs"]) or "all",
+        "schema_scope": ", ".join(ctx.config["include_schemas"]) or "all",
+        "area_scope": ", ".join(ctx.config["include_areas"]) or "all",
         "activity_window_days": str(ctx.config["activity_window_days"]),
         "current_user": ctx.current_user or "unknown",
         "score_rows": _score_rows(scores),
@@ -221,13 +223,25 @@ def _quick_wins(findings: List[Finding]) -> str:
 
 
 def _overview(ctx: ReviewContext) -> str:
-    parts = ["**Unity Catalog data**", _uc_overview(ctx), "**Jobs & pipelines**", _jobs_overview(ctx),
-             "**Compute & warehouses**", _compute_overview(ctx)]
-    scope = ", ".join(ctx.config["include_catalogs"])
-    if scope:
-        parts.insert(0, f"_The catalog filter ({scope}) applies to Unity Catalog data only; jobs, compute, and "
-                        "settings cover the whole workspace._")
-    return "\n\n".join(parts)
+    sections = []
+    if ctx.area_in_scope("uc"):
+        sections += ["**Unity Catalog data**", _uc_overview(ctx)]
+    if ctx.area_in_scope("jobs"):
+        sections += ["**Jobs & pipelines**", _jobs_overview(ctx)]
+    if ctx.area_in_scope("compute"):
+        sections += ["**Compute & warehouses**", _compute_overview(ctx)]
+    catalogs = ", ".join(ctx.config["include_catalogs"])
+    schemas = ", ".join(ctx.config["include_schemas"])
+    if catalogs or schemas:
+        bits = []
+        if catalogs:
+            bits.append(f"catalogs: {catalogs}")
+        if schemas:
+            bits.append(f"schemas: {schemas}")
+        extra = "jobs, compute, and settings cover the whole workspace" if any(
+            ctx.area_in_scope(a) for a in ("jobs", "compute", "settings")) else "other workspace areas were skipped"
+        sections.insert(0, f"_The filter ({'; '.join(bits)}) applies to Unity Catalog data only; {extra}._")
+    return "\n\n".join(sections)
 
 
 def _metric_table(rows) -> str:
@@ -281,6 +295,8 @@ def _compute_overview(ctx: ReviewContext) -> str:
 
 
 def _settings_section(ctx: ReviewContext) -> str:
+    if not ctx.area_in_scope("settings"):
+        return "_Workspace settings were not in this run (see include_areas)._"
     inv = ctx.stats.get("settings", {}).get("inventory")
     if inv is None or inv.empty:
         return "_Workspace settings were not collected (see Coverage)._"
@@ -352,6 +368,8 @@ def _findings_by_area(findings: List[Finding], data_files: Dict[str, str]) -> st
 
 
 def _migration_section(ctx: ReviewContext, findings: List[Finding]) -> str:
+    if not ctx.area_in_scope("uc"):
+        return "_Unity Catalog was not in this run (see include_areas)._"
     uc = ctx.stats.get("uc", {})
     parts = []
     hive = uc.get("hive_summary")
@@ -431,7 +449,7 @@ def _coverage(ctx: ReviewContext) -> str:
 
 
 def _settings(ctx: ReviewContext) -> str:
-    keys = ["include_catalogs", "excluded_catalogs", "extra_excluded_catalogs", "activity_window_days",
+    keys = ["include_areas", "include_catalogs", "include_schemas", "system_catalog", "excluded_catalogs", "extra_excluded_catalogs", "activity_window_days",
             "max_tables_detail", "history_min_files", "small_file_avg_mb", "small_files_min_table_gb",
             "small_files_medium_count", "small_files_high_count", "migration_rewrite_ratio_high", "deep_scan"]
     return md_table(pd.DataFrame([{"Setting": k, "Value": _fmt(ctx.config[k])} for k in keys]))

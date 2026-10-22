@@ -1,6 +1,6 @@
 -- Compute: clusters, utilization, warehouses, and cost. Columns confirmed against a live workspace (2026-10).
--- system.compute.clusters / warehouses keep one row per change; queries take the latest row.
--- Placeholders: {workspace_id}, {activity_window_days}
+-- {system_catalog}.compute.clusters / warehouses keep one row per change; queries take the latest row.
+-- Placeholders: {system_catalog} (default `system`), {workspace_id}, {activity_window_days}
 
 -- name: clusters_current
 -- Latest config of every cluster that hasn't been deleted (all sources: UI, API, JOB, PIPELINE, ...).
@@ -9,7 +9,7 @@ SELECT cluster_id, cluster_name, owned_by, cluster_source, dbr_version, data_sec
        driver_node_type, worker_node_type, tags, create_time, change_time
 FROM (
   SELECT *, row_number() OVER (PARTITION BY cluster_id ORDER BY change_time DESC) AS rn
-  FROM system.compute.clusters
+  FROM {system_catalog}.compute.clusters
   WHERE workspace_id = '{workspace_id}'
 )
 WHERE rn = 1 AND delete_time IS NULL
@@ -24,7 +24,7 @@ SELECT cluster_id,
        avg(mem_used_percent) AS avg_mem_pct,
        min(start_time) AS first_seen,
        max(end_time) AS last_seen
-FROM system.compute.node_timeline
+FROM {system_catalog}.compute.node_timeline
 WHERE workspace_id = '{workspace_id}'
   AND start_time >= current_timestamp() - INTERVAL {activity_window_days} DAYS
 GROUP BY cluster_id
@@ -36,8 +36,8 @@ SELECT coalesce(u.usage_metadata.cluster_id, u.usage_metadata.warehouse_id) AS c
        sum(u.usage_quantity) AS dbus,
        sum(u.usage_quantity * p.pricing.default) AS list_cost,
        max(p.currency_code) AS currency
-FROM system.billing.usage u
-LEFT JOIN system.billing.list_prices p
+FROM {system_catalog}.billing.usage u
+LEFT JOIN {system_catalog}.billing.list_prices p
   ON u.sku_name = p.sku_name AND u.cloud = p.cloud AND u.usage_unit = p.usage_unit
  AND u.usage_end_time >= p.price_start_time
  AND (p.price_end_time IS NULL OR u.usage_end_time < p.price_end_time)
@@ -52,7 +52,7 @@ SELECT warehouse_id, warehouse_name, warehouse_type, warehouse_channel, warehous
        max_clusters, auto_stop_minutes, tags, created_by
 FROM (
   SELECT *, row_number() OVER (PARTITION BY warehouse_id ORDER BY change_time DESC) AS rn
-  FROM system.compute.warehouses
+  FROM {system_catalog}.compute.warehouses
   WHERE workspace_id = '{workspace_id}'
 )
 WHERE rn = 1 AND delete_time IS NULL

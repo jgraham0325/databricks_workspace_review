@@ -3,6 +3,11 @@
 The review uses whatever the person running it can read. Preflight probes each source and the report
 lists anything missing.
 
+Queries read from the `system` catalog by default. Override `system_catalog` when this workspace instead
+exposes a views catalog with the same schema and table names (`information_schema`, `billing`, `compute`,
+`lakeflow`, `access`, `storage`), typically filtered to the caller. Schema and table names stay as below;
+only the catalog prefix changes. That catalog is also excluded from the Unity Catalog inventory.
+
 | Source | Used for | If missing |
 |---|---|---|
 | `system.information_schema.{catalogs,schemata,tables,volumes}` | UC inventory | UC section skipped |
@@ -18,8 +23,8 @@ lists anything missing.
 
 ## Grants needed
 
-- `USE CATALOG` / `USE SCHEMA` / `SELECT` on `system.access`, `system.storage`, `system.billing`, `system.compute`,
-  `system.lakeflow` (an account admin must enable the schemas and grant access).
+- `USE CATALOG` / `USE SCHEMA` / `SELECT` on `<system_catalog>.access`, `.storage`, `.billing`, `.compute`,
+  `.lakeflow` (an account admin must enable the schemas and grant access, unless a views catalog is used).
 - To see every table: metastore admin, or `USE CATALOG` + `USE SCHEMA` + `SELECT` (or `BROWSE`) on each catalog.
   Tables the caller can't see are simply not counted.
 - `DESCRIBE HISTORY` needs `SELECT` on the table.

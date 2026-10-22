@@ -1,7 +1,7 @@
 <!-- Filled in by scripts/review/report.py. Placeholders are names in double braces; every one must be filled. -->
 # Workspace review: {{workspace_name}}
 
-_Generated {{generated_at}} · catalogs: {{catalog_scope}} · activity window {{activity_window_days}} days · run by {{current_user}}_
+_Generated {{generated_at}} · areas: {{area_scope}} · catalogs: {{catalog_scope}} · schemas: {{schema_scope}} · activity window {{activity_window_days}} days · run by {{current_user}}_
 
 > **Drill-down:** every affected object for each finding, with its fix command, is in the notebook
 > `{{notebook_path}}`. This report shows the top items only.

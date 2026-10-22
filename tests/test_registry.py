@@ -2,7 +2,7 @@
 
 import os
 
-from review import REGISTERED_CHECKS, STEPS
+from review import REGISTERED_CHECKS, STEPS, STEP_AREA
 from review.checks import CheckSpec, run_checks
 from review.config import DEFAULTS
 from review.context import Finding, ReviewContext
@@ -19,6 +19,8 @@ def test_registry_metadata_is_valid_and_unique():
 
     areas = {area for area, _ in AREAS}
     stages = [name for name, _ in STEPS]
+    assert set(STEP_AREA) == set(stages)
+    assert STEP_AREA["preflight"] is None
     assert stages.index("jobs") < stages.index("compute")
     for check in REGISTERED_CHECKS:
         assert check.area in areas

@@ -1,5 +1,6 @@
 """Databricks workspace review: read-only collection and checks, driven by the workspace-review skill."""
 
+from .config import REVIEW_AREAS
 from .context import Finding, ReviewContext  # noqa: F401
 from . import preflight, uc_assets, table_detail, migration_backlog, jobs, compute, settings  # noqa: F401
 from .checks import REGISTERED_CHECKS, register_checks, run_checks
@@ -69,14 +70,35 @@ STEPS = [
     ("settings", _settings),
 ]
 
+# Which review area a step belongs to. preflight always runs.
+STEP_AREA = {
+    "preflight": None,
+    "uc_assets": "uc",
+    "table_detail": "uc",
+    "migration_backlog": "uc",
+    "jobs": "jobs",
+    "compute": "compute",
+    "settings": "settings",
+}
+
+
+def steps_to_run(ctx: ReviewContext):
+    """STEPS entries this run will execute, honoring include_areas."""
+    return [(name, step) for name, step in STEPS
+            if STEP_AREA[name] is None or ctx.area_in_scope(STEP_AREA[name])]
+
 
 def run_all(ctx: ReviewContext, verbose: bool = True, output_dir: str = None) -> dict:
-    """Run every step, then write the report folder (report, remediation SQL, drill-down notebook, data).
+    """Run every in-scope step, then write the report folder (report, remediation SQL, drill-down notebook, data).
     Returns the paths.
 
     A failing step is recorded and the review continues with the next one, so a report is always written.
     """
-    for name, step in STEPS:
+    skipped = [area for area in REVIEW_AREAS if not ctx.area_in_scope(area)]
+    if skipped:
+        ctx.note("Skipped " + ", ".join(skipped) + " (include_areas="
+                 + ", ".join(ctx.included_areas()) + ").")
+    for name, step in steps_to_run(ctx):
         if verbose:
             print(f"[workspace-review] {name} ...", flush=True)
         try:
